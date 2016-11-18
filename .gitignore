@@ -38,4 +38,8 @@ jspm_packages
 
 # mkv files
 *.mkv
+*.wav
+*.mp3
+*.ac3
+temp/
 
