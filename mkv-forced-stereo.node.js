@@ -3,8 +3,9 @@
 'use strict';
 
 const Q         = require('q');                  // https://github.com/kriskowal/q
-const fs        = require('fs');
+const fs        = require('fs');                 // https://nodejs.org/api/fs.html
 const exec      = require('child_process').exec; // https://nodejs.org/api/child_process.html#child_process_child_process_exec_command_options_callback
+const tempPath  = require('os').tmpdir();        // https://nodejs.org/api/os.html#os_os_tmpdir
 
 let spinner = {
 	characters: ['\u2058','\u2059'],
@@ -40,9 +41,9 @@ const fstro = {
 			console.log('missing file name');
 			process.exit();
 		}
-		
+
 		if (!fstro.fileTest(process.argv[2])) {
-			console.log('Looks like '+ process.argv[2] +' is not a file.');
+			console.log(`Looks like ${process.argv[2]} is not a file.`);
 			process.exit();
 		}
 
@@ -54,12 +55,12 @@ const fstro = {
 			.then(fstro.rebuildMkv)
 			.then(fstro.moveMKV)
 			.then(fstro.cleanUp);
-		
+
 	},
 	fileTest: function(fname) {
 		console.log('Testing file.');
 		let stats = fs.lstatSync(fname);
-		return stats.isFile();	
+		return stats.isFile();
 	},
 	genFileNames: function(fname) {
 		console.log('Generating file names.');
@@ -71,7 +72,7 @@ const fstro = {
 			file.path              = process.cwd();
 			file.movie.original    = pargv;
 		}
-		
+
 		file.movie.noAudio     = 'no_audio.mkv';
 		file.movie.stereoAudio = 'forced_stereo.mkv';
 		file.audio.monoAC3     = 'mono.ac3';
@@ -81,7 +82,7 @@ const fstro = {
 		let deferred = Q.defer();
 		// mkvmerge -i mono_audio.mkv
 		console.log('Identifying MKV file.');
-		let cmd = 'mkvmerge -i "'+ file.path+'/'+file.movie.original +'"';
+		let cmd = `mkvmerge -i "${file.path}/${file.movie.original}"`;
 		exec(cmd, function(err, out, code) {
 			if (err) {
 				console.log('Error: ',err);
@@ -96,7 +97,7 @@ const fstro = {
 		let deferred = Q.defer();
 		// mkvextract tracks mono_audio.mkv 1:mono.ac3
 		console.log('Extracting mono audio file from MKV.');
-		let cmd = 'mkvextract tracks "'+ file.path+'/'+file.movie.original +'" '+ file.audio.trackId +':/tmp/'+ file.audio.monoAC3;
+		let cmd = `mkvextract tracks "${file.path}/${file.movie.original}" ${file.audio.trackId}:${tempPath}/${file.audio.monoAC3}`;
 		spinner.start();
 		exec(cmd, function(err, out, code) {
 			if (err) {
@@ -104,15 +105,15 @@ const fstro = {
 				deferred.reject(err);
 			}
 			spinner.stop();
-			deferred.resolve();	
+			deferred.resolve();
 		});
-		return deferred.promise;	
+		return deferred.promise;
 	},
 	mkvOutputNoAudio: function() {
 		let deferred = Q.defer();
 		// mkvmerge -o no_audio.mkv --no-audio mono_audio.mkv
 		console.log('Making no audio MKV.');
-		let cmd = 'mkvmerge -q -o /tmp/'+ file.movie.noAudio +' --no-audio "'+ file.path +'/'+ file.movie.original +'"';
+		let	cmd = `mkvmerge -q -o ${tempPath}/${file.movie.noAudio} --no-audio "${file.path}/${file.movie.original}"`;
 		spinner.start();
 		exec(cmd, function(err, out, code) {
 			if (err) {
@@ -128,7 +129,7 @@ const fstro = {
 		let deferred = Q.defer();
 		// ffmpeg -i mono.ac3 -ac 2 stereo.ac3
 		console.log('Converting mono audio to forced stereo.');
-		let cmd = 'ffmpeg -y -hide_banner -nostats -loglevel 0 -i /tmp/'+ file.audio.monoAC3 +' -ac 2 /tmp/'+ file.audio.stereoAC3;
+		let cmd = `ffmpeg -y -hide_banner -nostats -loglevel 0 -i ${tempPath}/${file.audio.monoAC3} -ac 2 ${tempPath}/${file.audio.stereoAC3}`;
 		spinner.start();
 		exec(cmd, function(err, out, code) {
 			if (err) {
@@ -153,16 +154,16 @@ const fstro = {
 		     no_audio.mkv
 		*/
 		console.log('Rebuilding MKV file.');
-		let cmd  = 'mkvmerge';
-		    cmd += ' -q';
-		    cmd += ' -o /tmp/'+ file.movie.stereoAudio;
-		    cmd += ' --language 0:eng';
-		    cmd += ' --track-name "0:2-Forced Stereo (AC3)"';
-		    cmd += ' --default-track 0:no';
-		    cmd += ' --forced-track  0:yes';
-		    cmd += ' -a 0 -D -S /tmp/'+ file.audio.stereoAC3;
-		    cmd += ' /tmp/'+ file.movie.noAudio;
-		
+		let cmd = `mkvmerge
+			     -q
+			     -o ${tempPath}/${file.movie.stereoAudio}
+			     --language 0:eng
+			     --track-name "0:2-Forced Stereo (AC3)"
+			     --default-track 0:no
+			     --forced-track  0:yes
+			     -a 0 -D -S ${tempPath}/${file.audio.stereoAC3}
+			     ${tempPath}/${file.movie.noAudio}
+		`.replace(/[\n\t\r]/g,'');
 		spinner.start();
 		exec(cmd, function(err, out, code) {
 			if (err) {
@@ -177,8 +178,8 @@ const fstro = {
 	moveMKV: function() {
 		let deferred = Q.defer();
 		// move rebuilt mkv from temp
-		console.log('Moving rebuilt MKV file to '+ file.path +'.');
-		let cmd = 'mv /tmp/'+ file.movie.stereoAudio +' "'+ file.path +'/'+ file.movie.stereoAudio +'"';
+		console.log(`Moving rebuilt MKV file to: ${file.path}`);
+		let cmd = `mv ${tempPath}/${file.movie.stereoAudio} "${file.path}/${file.movie.stereoAudio}"`;
 		spinner.start();
 		exec(cmd, function(err, out, code) {
 			if (err) {
@@ -195,10 +196,11 @@ const fstro = {
 		// move rebuilt mkv from temp
 		// rm stuff
 		console.log('Removing temp files.');
-		let cmd  = 'rm';
-		    cmd += ' /tmp/'+ file.movie.noAudio;
-		    cmd += ' /tmp/'+ file.audio.monoAC3;
-		    cmd += ' /tmp/'+ file.audio.stereoAC3; 
+		let cmd = `rm
+		          ${tempPath}/${file.movie.noAudio}
+		          ${tempPath}/${file.audio.monoAC3}
+		          ${tempPath}/${file.audio.stereoAC3}
+		`.replace(/[\n\t\r]/g,'');
 		exec(cmd, function(err, out, code) {
 			if (err) {
 				console.log('Error: ',err);
@@ -209,6 +211,7 @@ const fstro = {
 		return deferred.promise;
 	}
 };
+
 
 fstro.init();
 
