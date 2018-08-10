@@ -3,105 +3,150 @@
 'use strict';
 
 const Q         = require('q');                  // https://github.com/kriskowal/q
+const which     = require('which');              // https://github.com/npm/node-which
 const fs        = require('fs');                 // https://nodejs.org/api/fs.html
+const path      = require('path');               // https://nodejs.org/api/path.html
 const exec      = require('child_process').exec; // https://nodejs.org/api/child_process.html#child_process_child_process_exec_command_options_callback
 const tempPath  = require('os').tmpdir();        // https://nodejs.org/api/os.html#os_os_tmpdir
+const _         = require('lodash');             // https://github.com/lodash/lodash
+const colors    = require('colors');             // https://github.com/Marak/colors.js
+const prompt    = require('prompt');             // https://github.com/flatiron/prompt
+      prompt.colors  = false;
+      prompt.message = '';
 
-let spinner = {
+const spinner = {
 	characters: ['\u2058','\u2059'],
 	to: false,
-	start: function() {
-		this.to = setInterval(function() {
+	start: () => {
+		this.to = setInterval(() => {
 			process.stdout.write(spinner.characters[Math.floor(Math.random() * 2)]);
 		},100);
 	},
-	stop: function() {
+	stop: () => {
 		console.log('');
 		clearInterval(this.to);
 	}
 };
 
-let file = {
-	path:  false,
-	movie: {
-		original:    false,
-		noAudio:     false,
-		stereoAudio: false
-	},
-	audio: {
-		trackId:   false,
-		monoAC3:   false,
-		stereoAC3: false
-	}
-};
-
 const fstro = {
-	init: function() {
+	init: () => {
 		if (process.argv.length !==3) {
 			console.log('missing file name');
 			process.exit();
 		}
 
-		if (!fstro.fileTest(process.argv[2])) {
-			console.log(`Looks like ${process.argv[2]} is not a file.`);
+		if (!fs.lstatSync(process.argv[2]).isFile()) {
+			console.log(`${process.argv[2]} is not a file.`);
 			process.exit();
 		}
 
+		const ffmpeg   = which.sync('ffmpeg', {nothrow: true})   || console.log(`Missing: ffmpeg`);
+		const ffprobe  = which.sync('ffprobe', {nothrow: true})  || console.log(`Missing: ffprobe`);
+		const mkvmerge = which.sync('mkvmerge', {nothrow: true}) || console.log(`Missing: mkvmerge`);
+		if (!ffmpeg || !mkvmerge) process.exit();
+
+		console.log('--------------------------------');
 		fstro.genFileNames(process.argv[2]);
+
+		fstro.monoTracks = [];
+		fstro.stereoTracks = [];
+
 		fstro.mkvIdentify()
+			.then(fstro.audioTrackSelectionPrompt)
 			.then(fstro.mkvExtractMonoAudio)
-			.then(fstro.mkvOutputNoAudio)
 			.then(fstro.mono2stereo)
-			.then(fstro.rebuildMkv)
-			.then(fstro.moveMKV)
-			.then(fstro.cleanUp);
+			.then(fstro.buildMKV)
+			.then(fstro.cleanUp)
+			.then(fstro.done);
 
 	},
-	fileTest: function(fname) {
-		console.log('Testing file.');
-		let stats = fs.lstatSync(fname);
-		return stats.isFile();
-	},
-	genFileNames: function(fname) {
+	genFileNames: fname => {
 		console.log('Generating file names.');
-		let pargv = process.argv[2];
-		if (/\//.test(pargv)) {
-			file.path              = pargv.match(/(.+)\/(.+)$/)[1];
-			file.movie.original    = pargv.match(/(.+)\/(.+)$/)[2];
-		} else {
-			file.path              = process.cwd();
-			file.movie.original    = pargv;
-		}
-
-		file.movie.noAudio     = 'no_audio.mkv';
-		file.movie.stereoAudio = 'forced_stereo.mkv';
-		file.audio.monoAC3     = 'mono.ac3';
-		file.audio.stereoAC3   = 'stereo.ac3';
+		fstro.movieOriginal = fs.realpathSync(fname);
+		fstro.originalName  = path.basename(fname);
+		fstro.localPath     = path.dirname(path.resolve(fname));
 	},
-	mkvIdentify: function() {
-		let deferred = Q.defer();
-		// mkvmerge -i mono_audio.mkv
-		console.log('Identifying MKV file.');
-		let cmd = `mkvmerge -i "${file.path}/${file.movie.original}"`;
-		exec(cmd, function(err, out, code) {
+	mkvIdentify: () => {
+		const deferred = Q.defer();
+		// mkvmerge -J mono_audio.mkv
+		console.log('Identifying MKV file.\n');
+		const cmd = `mkvmerge -J "${fstro.movieOriginal}"`;
+		exec(cmd, (err, out) => {
 			if (err) {
-				console.log('Error: ',err);
+				console.log(colors.red(`Error: ${err}`));
 				deferred.reject(err);
 			}
-			file.audio.trackId = out.match(/Track ID (\d+): audio/)[1];
+			fstro.movieJson = JSON.parse(out);
+			fstro.audioTracksAll  = _.filter(fstro.movieJson.tracks, track => track.type==='audio');
+			fstro.audioTracksMono = _.filter(fstro.audioTracksAll, track => track.properties.audio_channels===1);
 			deferred.resolve();
 		});
 		return deferred.promise;
 	},
-	mkvExtractMonoAudio: function() {
+	audioTrackSelectionPrompt: () => {
+		const deferred = Q.defer();
+		console.log(`Found ${fstro.audioTracksAll.length} Audio Track(s)`);
+		console.log();
+		fstro.audioTracksAll.forEach(track => {
+			console.log(`	ID:         ${track.id}`);
+			console.log(`	Codec:      ${track.codec}`);
+			console.log(`	Channels:   ${track.properties.audio_channels}`);
+			console.log(`	Language:   ${track.properties.language}`);
+			console.log(`	Track Name: ${track.properties.track_name}`);
+			console.log(``);
+		});
+
+		const monoAudioIds = _.map(fstro.audioTracksMono, 'id');
+		const audioTracksAllIds = _.map(fstro.audioTracksAll, 'id');
+
+		prompt.start();
+		prompt.get({
+			properties: {
+				ids: {
+					description: `Select IDs to process [${monoAudioIds.join(',')}]`
+				}
+			}
+		}, (err, result) => {
+			if (err) {
+				console.log(colors.red(`Error: ${err}`));
+				deferred.reject(err);
+				process.exit();
+			}
+
+			result.ids = (result.ids==='') ? monoAudioIds : _.map(result.ids.match(/(\d+)/g), id => parseInt(id, 10));
+
+			fstro.selectedIds = _.remove(_.sortedUniq(result.ids), n => _.indexOf(audioTracksAllIds, n) >= 0);
+
+			if (fstro.selectedIds.length === 0) {
+				console.log(colors.red('Error: no tracks selected'));
+				deferred.reject('no tracks selected');
+				process.exit();
+			}
+
+			console.log('');
+
+			deferred.resolve();
+		});
+
+		return deferred.promise;
+	},
+	mkvExtractMonoAudio: () => {
 		let deferred = Q.defer();
 		// mkvextract tracks mono_audio.mkv 1:mono.ac3
-		console.log('Extracting mono audio file from MKV.');
-		let cmd = `mkvextract tracks "${file.path}/${file.movie.original}" ${file.audio.trackId}:${tempPath}/${file.audio.monoAC3}`;
+		console.log('Extracting mono audio track(s) from MKV.');
+		let cmd = `mkvextract tracks "${fstro.movieOriginal}"`;
+
+		fstro.selectedIds.forEach(id => {
+			const track = _.find(fstro.audioTracksAll, { id: id });
+			const ext   = _.findKey(codecIds, val => val===track.properties.codec_id);
+			fstro.monoTracks.push(`${id}.mono.${ext}`);
+			cmd = `${cmd} ${id}:${tempPath}/${id}.mono.${ext}`;
+		});
+
 		spinner.start();
-		exec(cmd, function(err, out, code) {
+		exec(cmd, (err, out) => {
 			if (err) {
-				console.log('Error: ',err);
+				console.log(colors.red(`Error: ${err}`));
 				deferred.reject(err);
 			}
 			spinner.stop();
@@ -109,99 +154,80 @@ const fstro = {
 		});
 		return deferred.promise;
 	},
-	mkvOutputNoAudio: function() {
-		let deferred = Q.defer();
-		// mkvmerge -o no_audio.mkv --no-audio mono_audio.mkv
-		console.log('Making no audio MKV.');
-		let	cmd = `mkvmerge -q -o ${tempPath}/${file.movie.noAudio} --no-audio "${file.path}/${file.movie.original}"`;
-		spinner.start();
-		exec(cmd, function(err, out, code) {
-			if (err) {
-				console.log('Error: ',err);
-				deferred.reject(err);
-			}
-			spinner.stop();
-			deferred.resolve();
-		});
-		return deferred.promise;
-	},
-	mono2stereo: function() {
+	mono2stereo: () => {
 		let deferred = Q.defer();
 		// ffmpeg -i mono.ac3 -ac 2 stereo.ac3
 		console.log('Converting mono audio to forced stereo.');
-		let cmd = `ffmpeg -y -hide_banner -nostats -loglevel 0 -i ${tempPath}/${file.audio.monoAC3} -ac 2 ${tempPath}/${file.audio.stereoAC3}`;
 		spinner.start();
-		exec(cmd, function(err, out, code) {
+		fstro.tcount = fstro.monoTracks.length;
+		fstro.monoTracks.forEach((track, n) => {
+			console.log(`→ Converting Track ${fstro.selectedIds[n]}`);
+			const cmd = `ffmpeg -y -hide_banner \\
+			  -nostats -loglevel 0 -i ${tempPath}/${track} \\
+			  -ac 2 ${tempPath}/${fstro.selectedIds[n]}.stereo.aac`;
+			fstro.stereoTracks.push(`${fstro.selectedIds[n]}.stereo.aac`);
+
+			exec(cmd, (err, out) => {
+				if (err) {
+					console.log(colors.red(`Error: ${err}`));
+					deferred.reject(err);
+				}
+
+				if (--fstro.tcount === 0) {
+					spinner.stop();
+					deferred.resolve();
+				}
+			});
+		});
+
+		return deferred.promise;
+	},
+	buildMKV: () => {
+		let deferred = Q.defer();
+		console.log(`Building: ${fstro.localPath}/forced_stereo.mkv`)
+		// mkvmerge -q -o forced_stereo.mkv original.mkv  \
+		//   --language 0:swe  \
+		//   --track-name "0:ForcedStereo (AC3)"  \
+		//   --default-track 0:no  \
+		//   --forced-track  0:no  \
+		//    -D -S TEMP/1.stereo.aac \
+		//   --language 0:eng  \
+		//   --track-name "0:ForcedStereo (AC3) Commentary"  \
+		//   --default-track 0:no  \
+		//   --forced-track  0:no  \
+		//    -D -S TEMP/2.stereo.aac
+
+		let cmd = `mkvmerge -q -o ${fstro.localPath}/forced_stereo.mkv ${fstro.movieOriginal} `;
+		fstro.stereoTracks.forEach((audioTrack, n) => {
+			const refTrack = _.find(fstro.audioTracksAll, track => track.id === fstro.selectedIds[n]);
+			cmd = `${cmd} \\
+			  --language 0:${refTrack.properties.language}  \\
+			  --track-name "0:Forced Stereo (AC3) ${refTrack.properties.track_name || '' }"  \\
+			  --default-track 0:no  \\
+			  --forced-track  0:no  \\
+			  -D -S ${tempPath}/${audioTrack} \\
+			`;
+		});
+		spinner.start();
+		exec(cmd, (err, out) => {
 			if (err) {
-				console.log('Error: ',err);
+				console.log(colors.red(`Error: ${err}`));
 				deferred.reject(err);
 			}
 			spinner.stop();
 			deferred.resolve();
 		});
+
 		return deferred.promise;
 	},
-	rebuildMkv: function() {
+	cleanUp: () => {
 		let deferred = Q.defer();
-		/*
-		mkvmerge \
-		     -o stereo_audio.mkv \
-		     --language 0:eng \
-		     --track-name "0:2-Forced Stereo (AC3)" \
-		     --default-track 0:no \
-		     --forced-track  0:yes \
-		     -a 0 -D -S stereo.ac3 \
-		     no_audio.mkv
-		*/
-		console.log('Rebuilding MKV file.');
-		let cmd = `mkvmerge
-			     -q
-			     -o ${tempPath}/${file.movie.stereoAudio}
-			     --language 0:eng
-			     --track-name "0:2-Forced Stereo (AC3)"
-			     --default-track 0:no
-			     --forced-track  0:yes
-			     -a 0 -D -S ${tempPath}/${file.audio.stereoAC3}
-			     ${tempPath}/${file.movie.noAudio}
-		`.replace(/[\n\t\r]/g,'');
-		spinner.start();
-		exec(cmd, function(err, out, code) {
-			if (err) {
-				console.log('Error: ',err);
-				deferred.reject(err);
-			}
-			spinner.stop();
-			deferred.resolve();
-		});
-		return deferred.promise;
-	},
-	moveMKV: function() {
-		let deferred = Q.defer();
-		// move rebuilt mkv from temp
-		console.log(`Moving rebuilt MKV file to: ${file.path}`);
-		let cmd = `mv ${tempPath}/${file.movie.stereoAudio} "${file.path}/${file.movie.stereoAudio}"`;
-		spinner.start();
-		exec(cmd, function(err, out, code) {
-			if (err) {
-				console.log('Error: ',err);
-				deferred.reject(err);
-			}
-			spinner.stop();
-			deferred.resolve();
-		});
-		return deferred.promise;
-	},
-	cleanUp: function() {
-		let deferred = Q.defer();
-		// move rebuilt mkv from temp
-		// rm stuff
-		console.log('Removing temp files.');
-		let cmd = `rm
-		          ${tempPath}/${file.movie.noAudio}
-		          ${tempPath}/${file.audio.monoAC3}
-		          ${tempPath}/${file.audio.stereoAC3}
-		`.replace(/[\n\t\r]/g,'');
-		exec(cmd, function(err, out, code) {
+		console.log('Removing Temp Files');
+		let cmd = 'rm';
+		fstro.monoTracks.forEach((track, n) => {
+			cmd = `${cmd} ${tempPath}/${track} ${tempPath}/${fstro.stereoTracks[n]} `;
+		})
+		exec(cmd, (err, out) => {
 			if (err) {
 				console.log('Error: ',err);
 				deferred.reject(err);
@@ -209,9 +235,58 @@ const fstro = {
 			deferred.resolve();
 		});
 		return deferred.promise;
+	},
+	done: () => {
+		console.log('');
+		console.log('Done! Verify With:');
+		console.log(`mkvinfo ${fstro.localPath}/forced_stereo.mkv`);
+		process.exit();
 	}
 };
 
 
+const codecIds = {
+	'ac3':   'A_AC3',
+	'eac3':  'A_EAC3',
+	'mp2':   'A_MPEG/L2',
+	'mp3':   'A_MPEG/L3',
+	'dts':   'A_DTS',
+	'wav':   'A_PCM/INT/LIT',
+	'wav':   'A_PCM/INT/BIG',
+	'flac':  'A_FLAC',
+	'caf':   'A_ALAC',
+	'oga':   'A_VORBIS',
+	'opus':  'A_OPUS',
+	'aac':   'A_AAC',
+	'ra':    'A_REAL/',
+	'mlp':   'A_MLP',
+	'thd':   'A_TRUEHD',
+	'tta':   'A_TTA1',
+	'wv':    'A_WAVPACK4',
+	'avi':   'V_MS/VFW/FOURCC',
+	'h264':  'V_MPEG4/ISO/AVC',
+	'h265':  'V_MPEGH/ISO/HEVC',
+	'rv':    'V_REAL/',
+	'm1v':   'V_MPEG1',
+	'm2v':   'V_MPEG2',
+	'ogv':   'V_THEORA',
+	'ivf':   'V_VP8',
+	'ivf':   'V_VP9',
+	'srt':   'S_TEXT/UTF8',
+	'srt':   'S_TEXT/ASCII',
+	'ssa':   'S_TEXT/SSA',
+	'ass':   'S_TEXT/ASS',
+	'ssa':   'S_SSA',
+	'ass':   'S_ASS',
+	'sub':   'S_VOBSUB',
+	'usf':   'S_TEXT/USF',
+	'ogx':   'S_KATE',
+	'sup':   'S_HDMV/PGS',
+	'textst': 'S_HDMV/TEXTST',
+	'vtt':    'S_TEXT/WEBVTT'
+}
+
 fstro.init();
+
+
 
