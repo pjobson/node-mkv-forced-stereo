@@ -18,5 +18,5 @@ PLEX will sometimes not play videos with mono audio tracks.  This creates a forc
 
 ## Force Something
 
-`mkv-forced-stereo.node.js /path/to/your/movie.mkv`
+`./mkv-forced-stereo.node.js /path/to/your/movie.mkv`
 
