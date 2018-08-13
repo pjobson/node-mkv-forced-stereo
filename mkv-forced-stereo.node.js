@@ -197,7 +197,7 @@ const fstro = {
 		//   --forced-track  0:no  \
 		//    -D -S TEMP/2.stereo.aac
 
-		let cmd = `mkvmerge -q -o ${fstro.localPath}/forced_stereo.mkv ${fstro.movieOriginal} `;
+		let cmd = `mkvmerge -q -o "${fstro.localPath}/forced_stereo.mkv" "${fstro.movieOriginal}" `;
 		fstro.stereoTracks.forEach((audioTrack, n) => {
 			const refTrack = _.find(fstro.audioTracksAll, track => track.id === fstro.selectedIds[n]);
 			cmd = `${cmd} \\
