@@ -4,7 +4,7 @@ PLEX will sometimes not play videos with mono audio tracks.  This creates a forc
 
 ## Requires
 
-* **mkvtoolnix** - https://mkvtoolnix.download
+* **mkvtoolnix** v25.0.0 ('Prog Noir') - https://mkvtoolnix.download
 * **ffmpeg** - https://www.ffmpeg.org
 * **nodejs** - https://nodejs.org/en/
 
