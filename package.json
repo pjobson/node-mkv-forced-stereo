@@ -1,16 +1,22 @@
 {
   "name": "node-mkv-forced-stereo",
   "version": "1.0.0",
-  "description": "PLEX will sometimes not play videos with mono audio tracks. This creates a forced stereo track and removes the original audio tracks.",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "description": "Creates a forced stereo track in an audio file.",
+  "main": "mkv-forced-stereo.node.js",
+  "engines": {
+    "node": ">=10.14.0",
+    "npm": ">=6.4.0"
   },
+  "scripts": {},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pjobson/node-mkv-forced-stereo.git"
   },
-  "author": "",
+  "author": {
+    "name": "Paul Jobson",
+    "email": "pjobson@gmail.com",
+    "url": "http://jobson.us"
+  },
   "license": "ISC",
   "bugs": {
     "url": "https://github.com/pjobson/node-mkv-forced-stereo/issues"
@@ -22,5 +28,8 @@
     "prompt": "^1.0.0",
     "q": "^1.4.1",
     "which": "^1.3.1"
+  },
+  "bin": {
+    "forced-stero": "./mkv-forced-stereo.node.js"
   }
 }
