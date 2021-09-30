@@ -36,6 +36,7 @@ I know .. I know .. I could put this in npm, there's a lot of junk in there, the
 
 ```
 cd node-mkv-forced-stereo
+npm install
 npm link
 ```
 
