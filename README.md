@@ -4,6 +4,14 @@ PLEX will sometimes not play videos with mono audio tracks.  This creates a forc
 stereo tracks from selected tracks.  The script will create new tracks from an existing
 MKV container, it will also generate a new MKV container if a non-MKV file is specified.
 
+For background information, the only reason I know about **forced stereo** is because I 
+happened to get a copy of a bootleg album set from Pink Floyd called 
+[A Tree Full of Secrets](https://rateyourmusic.com/release/unauth/pink-floyd/a-tree-full-of-secrets/).
+Several of the tracks were noted as *fake stereo* which led me to understanding that I could
+modify an audio track in mono to fake or forced stereo track basically by cloning the mono track into
+the left and right channels.  Thakfully ffmpeg does this automagically, you could theoretically also
+clone a mono channel into 6 channels for 5.1 surround, though I suspect the results would be lackluster.
+
 ## Requires
 
 * **mkvtoolnix** v25.0.0 ('Prog Noir') - https://mkvtoolnix.download
@@ -61,10 +69,10 @@ Extracting selected audio track(s).
 Converting mono audio to forced stereo.
 → Converting Track 1
 ⁘⁘⁙⁙⁙⁙⁙⁙⁘⁘⁘⁙⁘⁘⁙⁘⁘⁙⁘⁘⁘⁙⁘⁙⁙⁘⁘⁘⁘⁙⁘⁙⁘⁘⁙⁘⁙⁘⁙⁘⁙⁙⁙⁙⁘⁙⁙⁙
-Building: /home/pjobson/code/node-mkv-forced-stereo/temp/trailer.forced_stereo.mkv
+Building: /home/pjobson/Desktop/trailer.forced_stereo.mkv
 
 Removing Temp Path.
 
 Done! Verify With:
-mkvinfo /home/pjobson/code/node-mkv-forced-stereo/temp/trailer.forced_stereo.mkv
+mkvinfo ~/Desktop/trailer.forced_stereo.mkv
 ```
