@@ -22,7 +22,9 @@ MKV container, it will also generate a new MKV container if a non-MKV file is sp
 
 `git clone git@github.com:pjobson/node-mkv-forced-stereo.git`
 
-## Install requirements.
+## Install Script
+
+I know .. I know .. I could put this in npm, there's a lot of junk in there, they don't need my junk.
 
 ```
 cd node-mkv-forced-stereo
