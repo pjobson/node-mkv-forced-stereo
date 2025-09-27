@@ -9,7 +9,6 @@ const path      = require('path');               // https://nodejs.org/api/path.
 const exec      = require('child_process').exec; // https://nodejs.org/api/child_process.html#child_process_child_process_exec_command_options_callback
 const os_tmpdir = require('os').tmpdir();        // https://nodejs.org/api/os.html#os_os_tmpdir
 const tempPath  = `${os_tmpdir}/${new Date().getTime()}`;
-const _         = require('lodash');             // https://github.com/lodash/lodash
 const colors    = require('colors');             // https://github.com/Marak/colors.js
 const { mkdirp } = require('mkdirp');            // https://github.com/substack/node-mkdirp
 const readline  = require('readline');            // https://nodejs.org/api/readline.html
@@ -90,8 +89,8 @@ const fstro = {
 				}
 				fstro.movieJSON       = JSON.parse(out);
 				fstro.isMatroska      = fstro.movieJSON.container.type === 'Matroska';
-				fstro.audioTracksAll  = _.filter(fstro.movieJSON.tracks, track => track.type==='audio');
-				fstro.audioTracksMono = _.filter(fstro.audioTracksAll, track => track.properties.audio_channels===1);
+				fstro.audioTracksAll  = fstro.movieJSON.tracks.filter(track => track.type==='audio');
+				fstro.audioTracksMono = fstro.audioTracksAll.filter(track => track.properties.audio_channels===1);
 				resolve();
 			});
 		});
@@ -109,8 +108,8 @@ const fstro = {
 				console.log(``);
 			});
 
-			const monoAudioIds = _.map(fstro.audioTracksMono, 'id');
-			const audioTracksAllIds = _.map(fstro.audioTracksAll, 'id');
+			const monoAudioIds = fstro.audioTracksMono.map(track => track.id);
+			const audioTracksAllIds = fstro.audioTracksAll.map(track => track.id);
 
 			const rl = readline.createInterface({
 				input: process.stdin,
@@ -120,9 +119,9 @@ const fstro = {
 			rl.question(`Select IDs to process [${monoAudioIds.join(',')}]: `, (answer) => {
 				rl.close();
 
-				const ids = (answer.trim() === '') ? monoAudioIds : _.map((answer.match(/(\d+)/g) || []), id => parseInt(id, 10));
+				const ids = (answer.trim() === '') ? monoAudioIds : (answer.match(/(\d+)/g) || []).map(id => parseInt(id, 10));
 
-				fstro.selectedIds = _.remove(_.sortedUniq(ids), n => _.indexOf(audioTracksAllIds, n) >= 0);
+				fstro.selectedIds = [...new Set(ids)].sort((a, b) => a - b).filter(n => audioTracksAllIds.indexOf(n) >= 0);
 
 				if (fstro.selectedIds.length === 0) {
 					console.log(colors.red('Error: no tracks selected'));
@@ -156,8 +155,8 @@ const fstro = {
 				cmd = `mkvextract tracks "${fstro.movieOriginal}"`;
 
 				fstro.selectedIds.forEach(id => {
-					const track = _.find(fstro.audioTracksAll, { id: id });
-					const ext   = _.findKey(codecIds, val => val===track.properties.codec_id);
+					const track = fstro.audioTracksAll.find(track => track.id === id);
+					const ext   = Object.keys(codecIds).find(key => codecIds[key] === track.properties.codec_id);
 					fstro.monoTracks.push(`${id}:${tempPath}/${id}.mono.${ext}`);
 				});
 
@@ -238,7 +237,7 @@ const fstro = {
 				         "${fstro.localPath}/${fstro.outputName}" \\
 				         "${fstro.movieOriginal}" `;
 			fstro.stereoTracks.forEach((audioTrack, n) => {
-				const refTrack = _.find(fstro.audioTracksAll, track => track.id === fstro.selectedIds[n]);
+				const refTrack = fstro.audioTracksAll.find(track => track.id === fstro.selectedIds[n]);
 				cmd = `${cmd} \\
 				  --language 0:${refTrack.properties.language}  \\
 				  --track-name "0:Forced Stereo (AAC) ${refTrack.properties.track_name || '' }"  \\
