@@ -12,9 +12,7 @@ const tempPath  = `${os_tmpdir}/${new Date().getTime()}`;
 const _         = require('lodash');             // https://github.com/lodash/lodash
 const colors    = require('colors');             // https://github.com/Marak/colors.js
 const mkdirp    = require('mkdirp');             // https://github.com/substack/node-mkdirp
-const prompt    = require('prompt');             // https://github.com/flatiron/prompt
-      prompt.colors  = false;
-      prompt.message = '';
+const readline  = require('readline');            // https://nodejs.org/api/readline.html
 
 const spinner = {
 	characters: ['\u2058','\u2059'],
@@ -113,23 +111,17 @@ const fstro = {
 		const monoAudioIds = _.map(fstro.audioTracksMono, 'id');
 		const audioTracksAllIds = _.map(fstro.audioTracksAll, 'id');
 
-		prompt.start();
-		prompt.get({
-			properties: {
-				ids: {
-					description: `Select IDs to process [${monoAudioIds.join(',')}]`
-				}
-			}
-		}, (err, result) => {
-			if (err) {
-				console.log(colors.red(`Error: ${err}`));
-				deferred.reject(err);
-				process.exit();
-			}
+		const rl = readline.createInterface({
+			input: process.stdin,
+			output: process.stdout
+		});
 
-			result.ids = (result.ids==='') ? monoAudioIds : _.map(result.ids.match(/(\d+)/g), id => parseInt(id, 10));
+		rl.question(`Select IDs to process [${monoAudioIds.join(',')}]: `, (answer) => {
+			rl.close();
 
-			fstro.selectedIds = _.remove(_.sortedUniq(result.ids), n => _.indexOf(audioTracksAllIds, n) >= 0);
+			const ids = (answer.trim() === '') ? monoAudioIds : _.map((answer.match(/(\d+)/g) || []), id => parseInt(id, 10));
+
+			fstro.selectedIds = _.remove(_.sortedUniq(ids), n => _.indexOf(audioTracksAllIds, n) >= 0);
 
 			if (fstro.selectedIds.length === 0) {
 				console.log(colors.red('Error: no tracks selected'));
