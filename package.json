@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/pjobson/node-mkv-forced-stereo#readme",
   "dependencies": {
+    "cli-progress": "^3.12.0",
     "colors": "^1.3.1",
     "mkdirp": "^3.0.1",
     "which": "^5.0.0"
