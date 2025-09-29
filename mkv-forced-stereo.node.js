@@ -12,30 +12,116 @@ const tempPath  = `${os_tmpdir}/${new Date().getTime()}`;
 const colors    = require('colors');             // https://github.com/Marak/colors.js
 const { mkdirp } = require('mkdirp');            // https://github.com/substack/node-mkdirp
 const readline  = require('readline');            // https://nodejs.org/api/readline.html
+const cliProgress = require('cli-progress');      // https://github.com/npkgz/cli-progress
 
-const spinner = {
-	characters: ['\u2058','\u2059'],
-	to: false,
-	start: () => {
-		this.to = setInterval(() => {
-			process.stdout.write(spinner.characters[Math.floor(Math.random() * 2)]);
-		},100);
+// Progress bar configuration
+const progressBars = {
+	current: null,
+	multiBar: null,
+
+	init() {
+		this.multiBar = new cliProgress.MultiBar({
+			clearOnComplete: false,
+			hideCursor: true,
+			format: ' {task} |{bar}| {percentage}% | ETA: {eta_formatted} | {value}/{total}',
+			barCompleteChar: '\u2588',
+			barIncompleteChar: '\u2591',
+			etaBuffer: 50
+		}, cliProgress.Presets.shades_classic);
 	},
-	stop: () => {
-		console.log('');
-		clearInterval(this.to);
+
+	create(task, total) {
+		if (!this.multiBar) this.init();
+		return this.multiBar.create(total, 0, {
+			task,
+			eta_formatted: 'calculating...'
+		});
+	},
+
+	formatTime(seconds) {
+		if (seconds === null || isNaN(seconds) || seconds === Infinity) {
+			return 'calculating...';
+		}
+		if (seconds < 60) {
+			return `${Math.round(seconds)}s`;
+		}
+		const minutes = Math.floor(seconds / 60);
+		const remainingSeconds = Math.round(seconds % 60);
+		return `${minutes}m ${remainingSeconds}s`;
+	},
+
+	stop() {
+		if (this.multiBar) {
+			this.multiBar.stop();
+			this.multiBar = null;
+		}
 	}
 };
 
 const fstro = {
+	selectAllMono: false,
+	movieFile: '',
+	// Track naming template
+	trackNameTemplate: 'Forced Stereo (AAC) {original_name}',
+	// Parallel processing settings
+	maxConcurrency: 4, // Default concurrent processes
 	init: () => {
-		if (process.argv.length !==3) {
+		// Parse command line arguments
+		const args = process.argv.slice(2);
+
+		// Check for help flag
+		if (args.includes('--help') || args.includes('-h')) {
+			console.log('Usage: forced-stereo [OPTIONS] <video-file>');
+			console.log('');
+			console.log('Options:');
+			console.log('  --select-all-mono           Automatically select all mono audio tracks');
+			console.log('  --track-name-template TEXT  Custom naming template for stereo tracks');
+			console.log('                              Variables: {original_name}, {language}, {lang}, {codec}, {id}, {channels}');
+			console.log('                              Default: "Forced Stereo (AAC) {original_name}"');
+			console.log('  --max-concurrency N         Maximum concurrent ffmpeg processes (default: 4)');
+			console.log('  --help, -h                  Show this help message');
+			console.log('');
+			console.log('Examples:');
+			console.log('  forced-stereo movie.mkv');
+			console.log('  forced-stereo --select-all-mono movie.mkv');
+			console.log('  forced-stereo --track-name-template "Stereo {lang} {original_name}" movie.mkv');
+			console.log('  forced-stereo --max-concurrency 8 movie.mkv');
+			console.log('  forced-stereo --select-all-mono --max-concurrency 2 movie.mkv');
+			process.exit(0);
+		}
+
+		fstro.selectAllMono = args.includes('--select-all-mono');
+
+		// Parse track naming template
+		const templateIndex = args.indexOf('--track-name-template');
+		if (templateIndex !== -1 && templateIndex + 1 < args.length) {
+			fstro.trackNameTemplate = args[templateIndex + 1];
+		}
+
+		// Parse max concurrency
+		const concurrencyIndex = args.indexOf('--max-concurrency');
+		if (concurrencyIndex !== -1 && concurrencyIndex + 1 < args.length) {
+			const concurrency = parseInt(args[concurrencyIndex + 1], 10);
+			if (!isNaN(concurrency) && concurrency > 0 && concurrency <= 16) {
+				fstro.maxConcurrency = concurrency;
+			} else {
+				console.log('Error: --max-concurrency must be a number between 1 and 16');
+				process.exit(1);
+			}
+		}
+
+		fstro.movieFile = args.find(arg => !arg.startsWith('--') &&
+			arg !== fstro.trackNameTemplate &&
+			arg !== args[concurrencyIndex + 1]);
+
+		if (!fstro.movieFile) {
 			console.log('missing file name');
+			console.log('Use --help for usage information');
 			process.exit();
 		}
 
-		if (!fs.lstatSync(process.argv[2]).isFile()) {
-			console.log(`${process.argv[2]} is not a file.`);
+		if (!fs.lstatSync(fstro.movieFile).isFile()) {
+			console.log(`${fstro.movieFile} is not a file.`);
 			process.exit();
 		}
 
@@ -53,15 +139,19 @@ const fstro = {
      |_|  \\___/|_|  \\___\\___| |_____/ \\__\\___|_|  \\___|\\___/
 		`);
 
-		fstro.genFileNames(process.argv[2])
+		fstro.genFileNames(fstro.movieFile)
 			.then(fstro.mkvIdentify)
 			.then(fstro.audioTrackSelectionPrompt)
 			.then(fstro.makeTempDir)
 			.then(fstro.mkvExtractMonoAudio)
-			.then(fstro.mono2stereo)
+			.then(() => fstro.mono2stereo())
 			.then(fstro.buildMKV)
 			.then(fstro.cleanUp)
-			.then(fstro.done);
+			.then(fstro.done)
+			.catch(error => {
+				console.log(colors.red(`\nError: ${error.message || error}`));
+				process.exit(1);
+			});
 
 	},
 	genFileNames: fname => {
@@ -91,14 +181,74 @@ const fstro = {
 				fstro.isMatroska      = fstro.movieJSON.container.type === 'Matroska';
 				fstro.audioTracksAll  = fstro.movieJSON.tracks.filter(track => track.type==='audio');
 				fstro.audioTracksMono = fstro.audioTracksAll.filter(track => track.properties.audio_channels===1);
+				fstro.videoTracks     = fstro.movieJSON.tracks.filter(track => track.type==='video');
+				fstro.subtitleTracks  = fstro.movieJSON.tracks.filter(track => track.type==='subtitles');
+				fstro.hasChapters     = fstro.movieJSON.chapters && fstro.movieJSON.chapters.length > 0;
 				resolve();
 			});
 		});
 	},
+	formatTrackName: (template, track) => {
+		const originalName = track.properties.track_name || '';
+		const language = track.properties.language || 'und';
+		const codec = track.codec || 'Unknown';
+		const id = track.id.toString();
+		const channels = track.properties.audio_channels || 'Unknown';
+
+		return template
+			.replace(/{original_name}/g, originalName)
+			.replace(/{language}/g, language)
+			.replace(/{codec}/g, codec)
+			.replace(/{id}/g, id)
+			.replace(/{channels}/g, channels)
+			.replace(/{lang}/g, language.toUpperCase()) // Short uppercase language
+			.trim();
+	},
+	// Parallel processing utility with concurrency control
+	runWithConcurrency: async (tasks, maxConcurrency, onProgress) => {
+		const results = [];
+		const executing = [];
+		let completed = 0;
+
+		for (let i = 0; i < tasks.length; i++) {
+			const taskIndex = i;
+			const promise = tasks[i]().then(result => {
+				completed++;
+				if (onProgress) onProgress(completed, tasks.length);
+				return { index: taskIndex, result };
+			});
+
+			executing.push(promise);
+
+			if (executing.length >= maxConcurrency) {
+				const completed = await Promise.race(executing);
+				const completedIndex = executing.findIndex(p => p === completed);
+				executing.splice(completedIndex, 1);
+				results.push(completed);
+			}
+		}
+
+		// Wait for remaining tasks to complete
+		const remaining = await Promise.all(executing);
+		results.push(...remaining);
+
+		// Sort results by original task index
+		return results.sort((a, b) => a.index - b.index).map(r => r.result);
+	},
 	audioTrackSelectionPrompt: () => {
 		return new Promise((resolve, reject) => {
 			console.log(`Found ${fstro.audioTracksAll.length} Audio Track(s)`);
+			if (fstro.videoTracks.length > 0) {
+				console.log(`Found ${fstro.videoTracks.length} Video Track(s)`);
+			}
+			if (fstro.subtitleTracks.length > 0) {
+				console.log(`Found ${fstro.subtitleTracks.length} Subtitle Track(s)`);
+			}
+			if (fstro.hasChapters) {
+				console.log(`Found ${fstro.movieJSON.chapters.length} Chapter(s)`);
+			}
 			console.log();
+
 			fstro.audioTracksAll.forEach(track => {
 				console.log(`	ID:         ${track.id}`);
 				console.log(`	Codec:      ${track.codec}`);
@@ -110,6 +260,22 @@ const fstro = {
 
 			const monoAudioIds = fstro.audioTracksMono.map(track => track.id);
 			const audioTracksAllIds = fstro.audioTracksAll.map(track => track.id);
+
+			// If --select-all-mono flag is used, automatically select all mono tracks
+			if (fstro.selectAllMono) {
+				fstro.selectedIds = [...new Set(monoAudioIds)].sort((a, b) => a - b);
+
+				if (fstro.selectedIds.length === 0) {
+					console.log(colors.red('Error: no mono tracks found'));
+					reject('no mono tracks found');
+					process.exit();
+				}
+
+				console.log(`Auto-selecting all mono tracks: ${fstro.selectedIds.join(',')}`);
+				console.log('');
+				resolve();
+				return;
+			}
 
 			const rl = readline.createInterface({
 				input: process.stdin,
@@ -162,60 +328,110 @@ const fstro = {
 
 				cmd = `${cmd} ${fstro.monoTracks.join(' ')}`;
 
-				spinner.start();
+				const progressBar = progressBars.create('Extracting Audio', 100);
+				let progress = 0;
+				const progressInterval = setInterval(() => {
+					progress += Math.random() * 10;
+					if (progress > 95) progress = 95;
+					progressBar.update(Math.floor(progress));
+				}, 200);
+
 				exec(cmd, (err, out) => {
+					clearInterval(progressInterval);
+					progressBar.update(100);
+					progressBars.stop();
+
 					if (err) {
 						console.log(colors.red(`Error: ${err}`));
 						reject(err);
 						return;
 					}
-					spinner.stop();
 					resolve();
 				});
 			} else {
 				fstro.monoTracks.push(`1:${tempPath}/1.mono.aac`);
 				cmd = `ffmpeg -y -hide_banner -nostats -loglevel 0 -i "${fstro.movieOriginal}" ${tempPath}/1.mono.aac`;
-				spinner.start();
+
+				const progressBar = progressBars.create('Extracting Audio', 100);
+				let progress = 0;
+				const progressInterval = setInterval(() => {
+					progress += Math.random() * 8;
+					if (progress > 95) progress = 95;
+					progressBar.update(Math.floor(progress));
+				}, 250);
+
 				exec(cmd, (err, out) => {
+					clearInterval(progressInterval);
+					progressBar.update(100);
+					progressBars.stop();
+
 					if (err) {
 						console.log(colors.red(`Error: ${err}`));
 						reject(err);
 						return;
 					}
 					console.log(out);
-					spinner.stop();
 					resolve();
 				});
 			}
 		});
 	},
-	mono2stereo: () => {
-		return new Promise((resolve, reject) => {
-			// ffmpeg -i mono.ac3 -ac 2 stereo.ac3
-			console.log('Converting mono audio to forced stereo.');
-			spinner.start();
-			fstro.tcount = fstro.monoTracks.length;
-			fstro.monoTracks.forEach((track, n) => {
-				console.log(`→ Converting Track ${fstro.selectedIds[n]}`);
-				const cmd = `ffmpeg -y -hide_banner \\
-				  -nostats -loglevel 0 -i ${track.replace(/\d+:/,'')} \\
-				  -ac 2 ${tempPath}/${fstro.selectedIds[n]}.stereo.aac`;
-				fstro.stereoTracks.push(`${fstro.selectedIds[n]}.stereo.aac`);
+	mono2stereo: async () => {
+		// ffmpeg -i mono.ac3 -ac 2 stereo.ac3
+		console.log(`Converting mono audio to forced stereo (${fstro.maxConcurrency} concurrent processes).`);
+
+		const totalTracks = fstro.monoTracks.length;
+		const progressBar = progressBars.create('Converting to Stereo', totalTracks);
+		const startTime = Date.now();
+
+		// Create conversion tasks
+		const conversionTasks = fstro.monoTracks.map((track, n) => {
+			return () => new Promise((resolve, reject) => {
+				const trackId = fstro.selectedIds[n];
+				console.log(`→ Converting Track ${trackId}`);
+
+				const cmd = `ffmpeg -y -hide_banner -nostats -loglevel 0 -i ${track.replace(/\d+:/,'')} -ac 2 ${tempPath}/${trackId}.stereo.aac`;
+				const outputFile = `${trackId}.stereo.aac`;
 
 				exec(cmd, (err, out) => {
 					if (err) {
-						console.log(colors.red(`Error: ${err}`));
-						reject(err);
+						reject(new Error(`Track ${trackId} conversion failed: ${err.message}`));
 						return;
 					}
-
-					if (--fstro.tcount === 0) {
-						spinner.stop();
-						resolve();
-					}
+					resolve(outputFile);
 				});
 			});
 		});
+
+		try {
+			// Run conversions with concurrency control
+			const results = await fstro.runWithConcurrency(
+				conversionTasks,
+				fstro.maxConcurrency,
+				(completed, total) => {
+					const elapsed = (Date.now() - startTime) / 1000;
+					const avgTimePerTrack = elapsed / completed;
+					const remaining = total - completed;
+					const eta = remaining > 0 ? remaining * avgTimePerTrack : 0;
+
+					progressBar.update(completed, {
+						eta_formatted: remaining > 0 ? progressBars.formatTime(eta) : '0s'
+					});
+				}
+			);
+
+			// Update stereo tracks array with results
+			fstro.stereoTracks = results;
+
+			progressBars.stop();
+			const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+			console.log(`\nCompleted ${totalTracks} track(s) in ${totalTime}s (avg: ${(totalTime / totalTracks).toFixed(1)}s per track)`);
+
+		} catch (error) {
+			progressBars.stop();
+			console.log(colors.red(`Error during parallel conversion: ${error.message}`));
+			throw error;
+		}
 	},
 	buildMKV: () => {
 		return new Promise((resolve, reject) => {
@@ -233,27 +449,59 @@ const fstro = {
 			//   --forced-track  0:no  \
 			//    -D -S TEMP/2.stereo.aac
 
-			let cmd = `mkvmerge -q -o \\
-				         "${fstro.localPath}/${fstro.outputName}" \\
-				         "${fstro.movieOriginal}" `;
+			// Build comprehensive mkvmerge command with full metadata preservation
+			let cmd = `mkvmerge -q -o "${fstro.localPath}/${fstro.outputName}"`;
+
+			// Copy all original tracks with metadata preservation (including chapters and attachments)
+			cmd += ` "${fstro.movieOriginal}"`;
+
+			// Log what will be preserved
+			console.log(`Preserving ${fstro.videoTracks.length} video track(s)`);
+			console.log(`Preserving ${fstro.audioTracksAll.length} original audio track(s)`);
+			console.log(`Preserving ${fstro.subtitleTracks.length} subtitle track(s)`);
+			if (fstro.hasChapters) {
+				console.log(`Preserving ${fstro.movieJSON.chapters.length} chapter(s)`);
+			}
+			console.log(`Adding ${fstro.stereoTracks.length} forced stereo track(s)`);
+			console.log();
+
+			// Add new stereo tracks
 			fstro.stereoTracks.forEach((audioTrack, n) => {
 				const refTrack = fstro.audioTracksAll.find(track => track.id === fstro.selectedIds[n]);
-				cmd = `${cmd} \\
-				  --language 0:${refTrack.properties.language}  \\
-				  --track-name "0:Forced Stereo (AAC) ${refTrack.properties.track_name || '' }"  \\
-				  --default-track 0:no  \\
-				  --forced-track  0:no  \\
-				  -D -S ${tempPath}/${audioTrack} \\
-				`;
+				const trackName = fstro.formatTrackName(fstro.trackNameTemplate, refTrack);
+
+				cmd += ` --language 0:${refTrack.properties.language || 'und'}`;
+				cmd += ` --track-name "0:${trackName}"`;
+				cmd += ` --default-track 0:no`;
+				cmd += ` --forced-track 0:no`;
+				cmd += ` "${tempPath}/${audioTrack}"`;
+
+				console.log(`→ Adding stereo track: "${trackName}"`);
 			});
-			spinner.start();
+			console.log();
+
+			const progressBar = progressBars.create('Building MKV', 100);
+			let progress = 0;
+			const startTime = Date.now();
+			const progressInterval = setInterval(() => {
+				progress += Math.random() * 5;
+				if (progress > 95) progress = 95;
+				progressBar.update(Math.floor(progress));
+			}, 300);
+
 			exec(cmd, (err, out) => {
+				clearInterval(progressInterval);
+				progressBar.update(100);
+				progressBars.stop();
+
+				const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+				console.log(`\nMKV built in ${totalTime}s`);
+
 				if (err) {
 					console.log(colors.red(`Error: ${err}`));
 					reject(err);
 					return;
 				}
-				spinner.stop();
 				resolve();
 			});
 		});
