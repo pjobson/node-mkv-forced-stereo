@@ -110,9 +110,15 @@ const fstro = {
 			}
 		}
 
-		fstro.movieFile = args.find(arg => !arg.startsWith('--') &&
-			arg !== fstro.trackNameTemplate &&
-			arg !== args[concurrencyIndex + 1]);
+		const excludeArgs = new Set();
+		if (templateIndex !== -1 && templateIndex + 1 < args.length) {
+			excludeArgs.add(args[templateIndex + 1]);
+		}
+		if (concurrencyIndex !== -1 && concurrencyIndex + 1 < args.length) {
+			excludeArgs.add(args[concurrencyIndex + 1]);
+		}
+
+		fstro.movieFile = args.find(arg => !arg.startsWith('--') && !excludeArgs.has(arg));
 
 		if (!fstro.movieFile) {
 			console.log('missing file name');
